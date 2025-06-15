@@ -47,7 +47,7 @@ Now the question is, how can this be done?
   - The most straightforward way to do this is to make a clone of parent process, keep the metadata attributes the same and change the process-specific attributes accordingly.
   - And this is what the above mentioned 4-step process is doing.
 
-## Let's Go Practical
+# Let's Go Practical
 
 We are going to run an ELF binary made up of this C code:
 ```c
@@ -59,7 +59,7 @@ void main(){
   sleep(400);
 }
 ```
-and see how linux do all the magic.
+and see how linux does all the magic.
 
 To get the final ELF binary:
 ```bash
@@ -73,7 +73,7 @@ file main_exe
 main_exe: ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, for GNU/Linux 3.2.0, not stripped
 ```
 
-### Step1 - Call The Binary
+## Step1 - Call The Binary
 
 To call or execute the binary (`main_exe`), we need a shell (or terminal).
 
@@ -84,36 +84,35 @@ $ which zsh
 /usr/bin/zsh
 ```
 
-`zsh` itself is a "running" process. Lets find out.
+`zsh` itself is a "running" process.
 ```zsh
 $ ps
   
-PID TTY          TIME CMD
-41027 pts/0    00:00:01 zsh
-49852 pts/0    00:00:00 ps
+PID       TTY       TIME         CMD
+41027     pts/0     00:00:01     zsh
+49852     pts/0     00:00:00     ps
 ```
-This shows that zsh has a process ID of 41027.
 
-Now I ran the binary.
+Run the binary.
 ```zsh
 ./main_exe
 ```
 
 Lets do ps again. But the shell is occupied now. Lets run this binary in background.
 ```zsh
-$ ./main_exe
+$ ./main_exe &
 
 [1] 52184
 ```
 
-We can also verify the process IDs again.
+Final State:
 ```zsh
 $ ps                
 
-PID TTY          TIME CMD
-41027 pts/0    00:00:02 zsh
-52184 pts/0    00:00:00 main_exe
-52325 pts/0    00:00:00 ps
+PID       TTY       TIME         CMD
+41027     pts/0     00:00:02     zsh
+52184     pts/0     00:00:00     main_exe
+52325     pts/0     00:00:00     ps
 ```
 
 Since ./main_exe is executed within zsh, zsh must be the parent of main_exe? Lets verify this.
@@ -127,22 +126,26 @@ PID       PPID      CMD
 ```
   + -T shows processes for the current terminal session.
   + -o helps in custom formatting.
-  + But this shows that main_exe is a child of zsh.
 
 This proves that `fork()` was called upon the `zsh` process.
-  - Now, `execve()` is called inside this child process
 
-### Step2 - `execve()`
+Until now, we can say that a base template for the child process [, which is main_exe,] is created.
+  - Now we have to replace the process image in the fork.
 
-execve is a syscall, which replaces the current process image.
+### Step2 - Correct (Replace) The Process Image In The Child Process (Fork)
 
-A fork is a new-clone of the parent process. But the child has a differnt task than the parent. Therefore, the process image has to be changed in order to reflect that.
-  - This is what `execve()` is purposed for.
+`execve` is a syscall, which executes the program referred to by pathname.
 
-The kernel opens `main_exe` ELF file using virtual file system (VFS).
+A fork is a near-clone of the parent process. But the child process has a differnt purpose than the parent. Therefore, the process image has to be changed in order to reflect that.
+
+What is a process image?
+
+The kernel opens `main_exe` file using virtual file system (VFS).
   - Now it reads the ELF Header (first 64 bytes) to confirm that it is an ELF file, and find the `e_type`, `e_entry` and Program Headers Table (PHT) for the later work.
 
-The kernel loads the binary into memory by reading PHT. This is the PHT for our ELF:
+What is VFS and Why?
+
+The kernel loads the binary into the memory by reading the PHT. This is the PHT for our ELF:
 ```bash
 $ readelf -l main_exe
 
@@ -200,8 +203,9 @@ Program Headers:
    12     
    13     .init_array .fini_array .dynamic .got
 ```
+  - Note: All the addresses are 16 characters long. But they are prefixed by `0x`, which means, they are hexadecimal values and must be interpreted in pair of 2. Therefore, 16 characters = (16/2) bytes = 8 bytes in total. Because 2 hex characters = 1 byte.
 
-PHT describes how the operating system should load the ELF binary into memory. It essentially maps parts of the binary file into memory regions with specific permissions and purposes.
+PHT describes how the operating system should load the ELF binary into memory. It maps parts of the binary file into memory regions with specific permissions and purposes.
 
 A simple decode of this cryptic table is:
   - Type: PHDR
@@ -281,5 +285,3 @@ A simple decode of this cryptic table is:
 The kernel finds the `LOAD` segments and maps them into memory.
 
 Now our program's memory is loaded, but we're not executing yet.
-
-### Step 3 - 
