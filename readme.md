@@ -132,18 +132,30 @@ This proves that `fork()` was called upon the `zsh` process.
 Until now, we can say that a base template for the child process [, which is main_exe,] is created.
   - Now we have to replace the process image in the fork.
 
-### Step2 - Correct (Replace) The Process Image In The Child Process (Fork)
-
-`execve` is a syscall, which executes the program referred to by pathname.
+## Step2 - Correct (Replace) The Process Image In The Child Process (Fork)
 
 A fork is a near-clone of the parent process. But the child process has a differnt purpose than the parent. Therefore, the process image has to be changed in order to reflect that.
 
+What is `execve`?
+  - `execve` is a syscall which executes the binary passed in the pathname argument by replacing the process image of the current process.
+  - This design exists because execve is meant to be paired with `fork` in order to fit Linux's hierarchical and logical process structure.
+
 What is a process image?
+  - A process image is the complete in-memory layout of a program after it has been loaded into memory by the OS, and before or during execution.
+  - It is the answer to the question, "What the process looks like in the RAM?"
+  - It includes code, data, stack, heap, environment, memory-mapped regions, loaded libraries etc....
+  - A process image is the memory representation of a program at runtime.
+  - It is created by the kernel during execve(), based on ELF layout.
+
+This is the whole process that `execve` syscalls carries out.
 
 The kernel opens `main_exe` file using virtual file system (VFS).
   - Now it reads the ELF Header (first 64 bytes) to confirm that it is an ELF file, and find the `e_type`, `e_entry` and Program Headers Table (PHT) for the later work.
 
-What is VFS and Why?
+What is VFS and Why the kernel is using it?
+  - It's an abstraction layer inside the Linux kernel that provides a uniform interface to access all kinds of file systems — regardless of their actual formats or physical devices..
+  - There exists multiple file systems. For example - ext4, btrfs, zfs, hfs, ntfs, fat32 and so on.... If there is no VFS, the kernel has to learn to speak all the different file systems.
+  - VFS knows how to talk to different file systems and provide the kernel a consistent interface for regular operations.
 
 The kernel loads the binary into the memory by reading the PHT. This is the PHT for our ELF:
 ```bash
@@ -285,3 +297,42 @@ A simple decode of this cryptic table is:
 The kernel finds the `LOAD` segments and maps them into memory.
 
 Now our program's memory is loaded, but we're not executing yet.
+
+### Handle Dynamic Linking
+
+Since the PHT has INTERP header, this tells the kernel to run this interpreter `interpreter: /lib64/ld-linux-x86-64.so.2` before jumping to the entry point of the binary.
+
+The kernel now loads the dynamic linker (ld-linux-x86-64.so.2) into memory via its own PHT.
+
+The dynamic linker is the first code that will run in this process.
+
+Now the kernel sets up the stack, `rip` to ld-linux's entry point and returns the control to userspace.
+
+And the child process is finally alive.
+
+ld-linux now:
+  1. Parses the `.dynamic` section (readelf -S main_exe)
+  2. Finds the required shared libraries, like `libc.so.6`
+  3. Loads them into memory using `mmap()`.
+  4. Applies relocations to the code.
+  5. Finally, jumps to our ELF binary's real entry point (not main, but _start).
+
+### Entrypoint Mgmt && Program Execution
+
+The dynamic linker jumps to _start in your binary (provided by crt1.o).
+
+_start sets up the runtime.
+
+Then it calls `__libc_start_main()`, a libc function that: initializes more stuff and finally calls the `main()`
+
+Now the program runs.
+  - `printf()` is a call into `libc`.
+  - `sleep()` sleeps the process for 400 seconds using `nanosleep` syscall.
+
+## Step3 - End Of The Program
+
+After main() ends, control goes back to `__libc_start_main()`, which handles the final cleanup and calls `exit()`.
+
+The kernel:
+  + Cleans up process resources.
+  + Returns exit code to parent (your shell).
