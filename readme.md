@@ -442,3 +442,31 @@ Now, lets understand the flow of execution, that's the most important thing here
   - The first process then waits in the else part for the child to finish and then does the cleanup.
 
 And that's how we finish establishing a baseline understanding in linux processes.
+
+# When To Use What?
+
+`execve` syscall has multiple wrappers as library functions. The questions is, which one to use when?
+
+`execve(path, argv, envp)` is the raw signature of execve syscall.
+```c
+char *args[] = {"/path/to/binary", .., .., NULL};
+char *envp[] = {"variable=value", "var2=val2", NULL}
+execve(args[0], args, envp)
+```
+
+`execv(path, argv)`: inherits caller's environment.
+
+`execl(path, arg0, arg1, ..., NULL)`: Same as `execv`, except that the arguments are directly passed as varargs, rather than an array.
+
+`execvp(file, argv)`: searches `$PATH` variable for the binary. Good to run programs like a shell would do, like `ls` or `./exe`
+
+`execlp(file, arg0, ...., argN, NULL)`: combines `execl + $PATH`
+
+`execle(path, arg0, ..., NULL, envp)`: varargs + custom env
+
+## Prefix Guide
+
+v: vector: refers to an array/vector of arguments
+l: list: refers to a list of arguments, passed as varargs
+p: path: tells the function to search $PATH for the executable
+e: environment: lets you explicitly pass the environment
