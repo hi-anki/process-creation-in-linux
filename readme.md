@@ -18,7 +18,7 @@ A process is an instance of a running program. Every time you execute a command 
 Processes follow a tree like structure in linux.
   - The first process is `init` or `systemd`, depending on the system, which is started by the kernel. It's PID is 1, and PPID is 0.
   - Every process is created by another process (its parent process).
-  - Every process is a decendent of the `init` process.
+  - Every process is a descendant of the `init` process.
 
 To view the tree like structure of the processes, use `pstree`
 
@@ -39,7 +39,7 @@ Each process may require other helper processes.
   - For example, when I did `pstree`, I found that VS Code is not a standalone process. It has a lot of subprocesses in itself.
   - The same is with firefox and other processes.
 
-Hirarchial structure is not just a design philosophy, but a very logical decision.
+Hierarchical structure is not just a design philosophy, but a very logical decision.
   - It is a proper way to manage which process spawned which subprocess.
 
 Now the question is, how can this be done?
@@ -47,7 +47,7 @@ Now the question is, how can this be done?
   - The most straightforward way to do this is to make a clone of parent process, keep the metadata attributes the same and change the process-specific attributes accordingly.
   - And this is what the above mentioned 4-step process is doing.
 
-# Let's Go Practical
+# Lets Observe The Behavior 
 
 We are going to run an ELF binary made up of this C code:
 ```c
@@ -134,7 +134,7 @@ Until now, we can say that a base template for the child process [, which is mai
 
 ## Step2 - Correct (Replace) The Process Image In The Child Process (Fork)
 
-A fork is a near-clone of the parent process. But the child process has a differnt purpose than the parent. Therefore, the process image has to be changed in order to reflect that.
+A fork is a near-clone of the parent process. But the child process has a different purpose than the parent. Therefore, the process image has to be changed in order to reflect that.
 
 What is `execve`?
   - `execve` is a syscall which executes the binary passed in the pathname argument by replacing the process image of the current process.
@@ -157,7 +157,7 @@ What is VFS and Why the kernel is using it?
   - There exists multiple file systems. For example - ext4, btrfs, zfs, hfs, ntfs, fat32 and so on.... If there is no VFS, the kernel has to learn to speak all the different file systems.
   - VFS knows how to talk to different file systems and provide the kernel a consistent interface for regular operations.
 
-The kernel loads the binary into the memory by reading the PHT. This is the PHT for our ELF:
+The kernel loads the binary into the memory by reading the PHT. Specifically, it maps each segment defined in the PHT into memory regions using mmap() and sets the permissions (R, W, X) accordingly. This is the PHT for our ELF: 
 ```bash
 $ readelf -l main_exe
 
@@ -336,3 +336,109 @@ After main() ends, control goes back to `__libc_start_main()`, which handles the
 The kernel:
   + Cleans up process resources.
   + Returns exit code to parent (your shell).
+
+# Lets Manage An Actual Process Using C
+
+The source code of the program can be found here, [process.c](./process.c)
+
+```c
+// Standard I/O: printf() and perror()
+#include <stdio.h>
+
+// General Utils: exit()
+#include <stdlib.h>
+
+// POSIX OS API: fork(), execvp(), getpid(), getppid()
+#include <unistd.h>
+
+// Defines data types used in system calls: pid_t, the data type for process IDs
+#include <sys/types.h>
+
+// Provides macros and functions for waiting on child processes: waitpid(), WIFEXITED(), WEXITSTATUS()
+#include <sys/wait.h>
+
+int main() {
+  pid_t pid;
+
+  printf("Parent PID: %d\n", getpid());
+
+  // 1. Process creation (fork)
+  pid = fork();
+
+  if (pid < 0) {
+    perror("fork failed");
+    exit(EXIT_FAILURE);
+  }
+
+  if (pid == 0) {
+    // Child process
+    printf("Child PID: %d, PPID: %d\n", getpid(), getppid());
+
+    // 2. Image replacement using exec
+    char *args[] = {"./main_exe", NULL};
+    if (execvp(args[0], args) == -1) {
+      perror("exec failed");
+      exit(EXIT_FAILURE);
+    }
+  }
+
+  else {
+    // Parent process
+    int status;
+    waitpid(pid, &status, 0);  // Wait for child to finish
+
+    if (WIFEXITED(status)) {
+      printf("Child exited with status %d\n", WEXITSTATUS(status));
+    } else {
+      printf("Child did not exit normally.\n");
+    }
+  }
+
+  return 0;
+}
+```
+
+Lets understand this program.
+
+`pid_t` is just a type definition defined by POSIX to hold process IDs. It allows the kernel and user-space programs to use a consistent, portable data type for storing and passing process IDs.
+  - The `pid` variable just holds an integer value returned by `fork()`.
+
+fork() function is used to clone the calling process. It returns
+  - `0` if the process is cloned successfully and we are in the context of the newly created child process.
+  - `-1` if an error occurred
+  - and the process ID of the new process to the old process.
+  - What concerns us is 0, or -1. These are the two values that `pid` can actually hold.
+
+The functions `getpid()` and `getppid()` are used to obtain the child process ID and the parent process ID, respectively.
+  - These functions are relative to the process that has invoked them.
+  - This is why `getpid()` before forking the process returned the process ID of the current process, which became the parent process after forking.
+
+The `exec()` family of functions replaces the current process image with a new process image.
+  - The `char *const argv[]` argument is an array of pointers to null-terminated strings that represent the argument list available to the new program.
+  - The first argument, by convention, should point to the filename associated with the file being executed. The array of pointers must be terminated by a `null` pointer.
+
+  - `execvp()` is wrapper build upon `execve` syscall. Internally, it is just:
+    ```c
+    int execvp(const char *file, char *const argv[]);
+    ```
+  - The first argument is a pointer to the binary which is to be executed and the second argument is an array to the arguments provided to the binary.
+  - Why not `execvp(args)` directly?
+    - Remember, `sys.argv[0]` is reserved to the filename in python. `$0` is reserved for the script name in bash. The same principle is followed here.
+
+The `exec()` family of functions returns only when an error has occurred, which is -1.
+  - Therefore, we are running the binary through `execvp` and matching if the return value is -1, to indicate failure or success.
+
+The `waitpid()` function is like `async()` function in JavaScript, which waits for a longer process to finish and then adjusts the results appropriately, without stopping the current thread.
+  - `waitpid()` also waits for the child process to finish.
+  - After that some cleanup happens and we are done.
+
+Now, lets understand the flow of execution, that's the most important thing here.
+  - After forking the current process, now there exists two process with exact memory layout and execution context.
+  - Both the processes continue executing the same code from the point where fork() returned. The only difference is the return value of fork(), which tells them if they're the parent or the child.
+  - Since the first process has a `pid > 0`, it will go in either of the if-blocks.
+    - But the forked process has a `pid = 0`, therefore it will go in the second if-block.
+    - And since the first process has not gone into any of the if-blocks, it will go into the else-block.
+  - That's how it works.
+  - The first process then waits in the else part for the child to finish and then does the cleanup.
+
+And that's how we finish establishing a baseline understanding in linux processes.
