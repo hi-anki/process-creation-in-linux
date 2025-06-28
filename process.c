@@ -31,7 +31,7 @@ int main() {
     printf("Child PID: %d, PPID: %d\n", getpid(), getppid());
 
     // 2. Image replacement using exec
-    char *args[] = {"./main_exe", NULL};
+    char *args[] = {"./main_elf", NULL};
     if (execvp(args[0], args) == -1) {
       perror("exec failed");
       exit(EXIT_FAILURE);

@@ -2,6 +2,8 @@
 
 A process is an instance of a running program. Every time you execute a command or run a program, the Linux kernel creates a process to run it.
 
+Every process gets a virtual address space, which is mostly made up of the program image.
+
 ## Key Properties Of A Process
 
 | Property                 | Description                                                   |
@@ -19,21 +21,23 @@ Processes follow a tree like structure in linux.
   - The first process is `init` or `systemd`, depending on the system, which is started by the kernel. It's PID is 1, and PPID is 0.
   - Every process is created by another process (its parent process).
   - Every process is a descendant of the `init` process.
+  - Every process is independent in nature.
 
 To view the tree like structure of the processes, use `pstree`
 
-Why does process hierarchy exists? To understand this, we need to understand how processes are created.
+Why does process hierarchy exists?
+  - To understand this, we need to understand how processes are created.
 
 ## Process Creation
 
 It is a 4 step process.
 
-| Step | Description                                           | Function |
-| ---- | ----------------------------------------------------- | -------- |
-| 1    | Clone the current process                             | `fork()` |
-| 2    | Replaces the process image with the new program       | `exec()` |
-| 3    | Parent waits for the child to finish                  | `wait()` |
-| 4    | Process finishes and returns the status to the parent | `exit()` |
+| Step | Description | Syscall |
+| ---- | ------------------------- | -------- |
+| 1 | Clone the current process | `fork()` |
+| 2 | Replaces the process image with the new program in the cloned process | `exec()` |
+| 3 | Parent waits for the child to finish | `wait()` |
+| 4 | Process finishes and returns the status to the parent | `exit()` |
 
 Each process may require other helper processes.
   - For example, when I did `pstree`, I found that VS Code is not a standalone process. It has a lot of subprocesses in itself.
@@ -43,41 +47,33 @@ Hierarchical structure is not just a design philosophy, but a very logical decis
   - It is a proper way to manage which process spawned which subprocess.
 
 Now the question is, how can this be done?
-  - The child process must have the identifying attributes from the parent process. This is the requirement.
-  - The most straightforward way to do this is to make a clone of parent process, keep the metadata attributes the same and change the process-specific attributes accordingly.
+  - The child process must have the identifying attributes of the parent process.
+  - The most straightforward way to do this is to make a clone of the parent process, keep the metadata attributes the same and change the process-specific attributes accordingly.
   - And this is what the above mentioned 4-step process is doing.
 
 # Lets Observe The Behavior 
 
-We are going to run an ELF binary made up of this C code:
+We are going to run an ELF binary made from this C code and see how linux does all the magic.
 ```c
-#include<stdio.h>
-#include<unistd.h>
+#include <stdio.h>
+#include <unistd.h>    // sleep()
 
-void main(){
+int main(void){
   printf("Hello, World!");
   sleep(400);
 }
 ```
-and see how linux does all the magic.
 
 To get the final ELF binary:
 ```bash
-gcc main.c -o main_exe
-```
-
-Check:
-```bash
-file main_exe
-
-main_exe: ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, for GNU/Linux 3.2.0, not stripped
+gcc main.c -o main_elf
 ```
 
 ## Step1 - Call The Binary
 
-To call or execute the binary (`main_exe`), we need a shell (or terminal).
+To call or execute the binary (`main_elf`), we need a shell (or terminal).
 
-Now I have opened my shell, which is zsh.
+I have opened my shell, which is zsh.
 ```zsh
 $ which zsh
 
@@ -95,12 +91,12 @@ PID       TTY       TIME         CMD
 
 Run the binary.
 ```zsh
-./main_exe
+./main_elf
 ```
 
-Lets do ps again. But the shell is occupied now. Lets run this binary in background.
+Lets do ps again. But the shell is occupied now. Lets run the binary in background.
 ```zsh
-$ ./main_exe &
+$ ./main_elf &
 
 [1] 52184
 ```
@@ -111,113 +107,99 @@ $ ps
 
 PID       TTY       TIME         CMD
 41027     pts/0     00:00:02     zsh
-52184     pts/0     00:00:00     main_exe
+52184     pts/0     00:00:00     main_elf
 52325     pts/0     00:00:00     ps
 ```
 
-Since ./main_exe is executed within zsh, zsh must be the parent of main_exe? Lets verify this.
+Since main_elf is executed within zsh, zsh must be the parent of main_elf? Lets verify this.
 ```zsh
 $ ps -T -o pid,ppid,cmd
 
-PID       PPID      CMD
-41027     40797     /usr/bin/zsh -i
-59461     41027     ./main_exe
-59559     41027     ps -T -o pid,ppid,cmd
+PID     PPID    CMD
+41027   40797   /usr/bin/zsh -i
+59461   41027   ./main_elf
+59559   41027   ps -T -o pid,ppid,cmd
 ```
   + -T shows processes for the current terminal session.
   + -o helps in custom formatting.
 
 This proves that `fork()` was called upon the `zsh` process.
 
-Until now, we can say that a base template for the child process [, which is main_exe,] is created.
-  - Now we have to replace the process image in the fork.
+Until now, we can say that a base template for the child process is created.
+  - Now we have to find the evidence for the process image replacement.
 
 ## Step2 - Correct (Replace) The Process Image In The Child Process (Fork)
 
-A fork is a near-clone of the parent process. But the child process has a different purpose than the parent. Therefore, the process image has to be changed in order to reflect that.
+A fork is a near-clone of the parent process. But the child process is a different program than the parent. Therefore, the process image has to be changed.
 
 What is `execve`?
   - `execve` is a syscall which executes the binary passed in the pathname argument by replacing the process image of the current process.
-  - This design exists because execve is meant to be paired with `fork` in order to fit Linux's hierarchical and logical process structure.
+  - This design exists because `execve` is meant to be paired with `fork` in order to fit Linux's hierarchical process structure.
 
 What is a process image?
   - A process image is the complete in-memory layout of a program after it has been loaded into memory by the OS, and before or during execution.
   - It is the answer to the question, "What the process looks like in the RAM?"
   - It includes code, data, stack, heap, environment, memory-mapped regions, loaded libraries etc....
   - A process image is the memory representation of a program at runtime.
-  - It is created by the kernel during execve(), based on ELF layout.
+  - It is created by the kernel during `execve()`, based on ELF layout.
 
 This is the whole process that `execve` syscalls carries out.
 
-The kernel opens `main_exe` file using virtual file system (VFS).
+The kernel opens `main_elf` file using virtual file system (VFS).
   - Now it reads the ELF Header (first 64 bytes) to confirm that it is an ELF file, and find the `e_type`, `e_entry` and Program Headers Table (PHT) for the later work.
 
 What is VFS and Why the kernel is using it?
-  - It's an abstraction layer inside the Linux kernel that provides a uniform interface to access all kinds of file systems — regardless of their actual formats or physical devices..
-  - There exists multiple file systems. For example - ext4, btrfs, zfs, hfs, ntfs, fat32 and so on.... If there is no VFS, the kernel has to learn to speak all the different file systems.
-  - VFS knows how to talk to different file systems and provide the kernel a consistent interface for regular operations.
+  - It's an abstraction layer inside the Linux kernel that provides a uniform interface to access all kinds of file systems — regardless of their actual formats or physical devices.
+  - There exist multiple file systems, like ext4, btrfs, zfs, hfs, ntfs, fat32 and so on.... If there is no VFS, the kernel has to learn to speak all the different file systems.
+  - VFS knows how to talk to different file systems and provide the kernel with a consistent interface.
 
-The kernel loads the binary into the memory by reading the PHT. Specifically, it maps each segment defined in the PHT into memory regions using mmap() and sets the permissions (R, W, X) accordingly. This is the PHT for our ELF: 
-```bash
-$ readelf -l main_exe
+The kernel loads the binary into the memory by reading the PHT.
+  - It maps each segment defined in the PHT into memory regions using `mmap()` syscall and sets the permissions (R, W, X) accordingly.
+  - This is the PHT for our ELF: 
+    ```bash
+    $ readelf -l main_elf
 
-Elf file type is DYN (Position-Independent Executable file)
-Entry point 0x1060
-There are 14 program headers, starting at offset 64
+    Elf file type is DYN (Position-Independent Executable file)
+    Entry point 0x1060
+    There are 14 program headers, starting at offset 64
 
-Program Headers:
-  Type           Offset             VirtAddr           PhysAddr
-                 FileSiz            MemSiz              Flags  Align
-  PHDR           0x0000000000000040 0x0000000000000040 0x0000000000000040
-                 0x0000000000000310 0x0000000000000310  R      0x8
-  INTERP         0x0000000000000394 0x0000000000000394 0x0000000000000394
-                 0x000000000000001c 0x000000000000001c  R      0x1
-      [Requesting program interpreter: /lib64/ld-linux-x86-64.so.2]
-  LOAD           0x0000000000000000 0x0000000000000000 0x0000000000000000
-                 0x0000000000000660 0x0000000000000660  R      0x1000
-  LOAD           0x0000000000001000 0x0000000000001000 0x0000000000001000
-                 0x0000000000000179 0x0000000000000179  R E    0x1000
-  LOAD           0x0000000000002000 0x0000000000002000 0x0000000000002000
-                 0x000000000000010c 0x000000000000010c  R      0x1000
-  LOAD           0x0000000000002dd0 0x0000000000003dd0 0x0000000000003dd0
-                 0x0000000000000250 0x0000000000000258  RW     0x1000
-  DYNAMIC        0x0000000000002de0 0x0000000000003de0 0x0000000000003de0
-                 0x00000000000001e0 0x00000000000001e0  RW     0x8
-  NOTE           0x0000000000000350 0x0000000000000350 0x0000000000000350
-                 0x0000000000000020 0x0000000000000020  R      0x8
-  NOTE           0x0000000000000370 0x0000000000000370 0x0000000000000370
-                 0x0000000000000024 0x0000000000000024  R      0x4
-  NOTE           0x00000000000020ec 0x00000000000020ec 0x00000000000020ec
-                 0x0000000000000020 0x0000000000000020  R      0x4
-  GNU_PROPERTY   0x0000000000000350 0x0000000000000350 0x0000000000000350
-                 0x0000000000000020 0x0000000000000020  R      0x8
-  GNU_EH_FRAME   0x0000000000002014 0x0000000000002014 0x0000000000002014
-                 0x000000000000002c 0x000000000000002c  R      0x4
-  GNU_STACK      0x0000000000000000 0x0000000000000000 0x0000000000000000
-                 0x0000000000000000 0x0000000000000000  RW     0x10
-  GNU_RELRO      0x0000000000002dd0 0x0000000000003dd0 0x0000000000003dd0
-                 0x0000000000000230 0x0000000000000230  R      0x1
+    Program Headers:
+      Type           Offset             VirtAddr           PhysAddr           FileSiz            MemSiz              Flags  Align
+      PHDR           0x0000000000000040 0x0000000000000040 0x0000000000000040 0x0000000000000310 0x0000000000000310  R      0x8
+      INTERP         0x0000000000000394 0x0000000000000394 0x0000000000000394 0x000000000000001c 0x000000000000001c  R      0x1
+                    [Requesting program interpreter: /lib64/ld-linux-x86-64.so.2]
+      LOAD           0x0000000000000000 0x0000000000000000 0x0000000000000000 0x0000000000000660 0x0000000000000660  R      0x1000
+      LOAD           0x0000000000001000 0x0000000000001000 0x0000000000001000 0x0000000000000179 0x0000000000000179  R E    0x1000
+      LOAD           0x0000000000002000 0x0000000000002000 0x0000000000002000 0x000000000000010c 0x000000000000010c  R      0x1000
+      LOAD           0x0000000000002dd0 0x0000000000003dd0 0x0000000000003dd0 0x0000000000000250 0x0000000000000258  RW     0x1000
+      DYNAMIC        0x0000000000002de0 0x0000000000003de0 0x0000000000003de0 0x00000000000001e0 0x00000000000001e0  RW     0x8
+      NOTE           0x0000000000000350 0x0000000000000350 0x0000000000000350 0x0000000000000020 0x0000000000000020  R      0x8
+      NOTE           0x0000000000000370 0x0000000000000370 0x0000000000000370 0x0000000000000024 0x0000000000000024  R      0x4
+      NOTE           0x00000000000020ec 0x00000000000020ec 0x00000000000020ec 0x0000000000000020 0x0000000000000020  R      0x4
+      GNU_PROPERTY   0x0000000000000350 0x0000000000000350 0x0000000000000350 0x0000000000000020 0x0000000000000020  R      0x8
+      GNU_EH_FRAME   0x0000000000002014 0x0000000000002014 0x0000000000002014 0x000000000000002c 0x000000000000002c  R      0x4
+      GNU_STACK      0x0000000000000000 0x0000000000000000 0x0000000000000000 0x0000000000000000 0x0000000000000000  RW     0x10
+      GNU_RELRO      0x0000000000002dd0 0x0000000000003dd0 0x0000000000003dd0 0x0000000000000230 0x0000000000000230  R      0x1
 
- Section to Segment mapping:
-  Segment Sections...
-   00     
-   01     .interp 
-   02     .note.gnu.property .note.gnu.build-id .interp .gnu.hash .dynsym .dynstr .gnu.version .gnu.version_r .rela.dyn .rela.plt 
-   03     .init .plt .plt.got .text .fini 
-   04     .rodata .eh_frame_hdr .eh_frame .note.ABI-tag 
-   05     .init_array .fini_array .dynamic .got .got.plt .data .bss 
-   06     .dynamic 
-   07     .note.gnu.property 
-   08     .note.gnu.build-id 
-   09     .note.ABI-tag 
-   10     .note.gnu.property 
-   11     .eh_frame_hdr 
-   12     
-   13     .init_array .fini_array .dynamic .got
-```
-  - Note: All the addresses are 16 characters long. But they are prefixed by `0x`, which means, they are hexadecimal values and must be interpreted in pair of 2. Therefore, 16 characters = (16/2) bytes = 8 bytes in total. Because 2 hex characters = 1 byte.
+    Section to Segment mapping:
+      Segment Sections...
+      00     
+      01     .interp 
+      02     .note.gnu.property .note.gnu.build-id .interp .gnu.hash .dynsym .dynstr .gnu.version .gnu.version_r .rela.dyn .rela.plt 
+      03     .init .plt .plt.got .text .fini 
+      04     .rodata .eh_frame_hdr .eh_frame .note.ABI-tag 
+      05     .init_array .fini_array .dynamic .got .got.plt .data .bss 
+      06     .dynamic 
+      07     .note.gnu.property 
+      08     .note.gnu.build-id 
+      09     .note.ABI-tag 
+      10     .note.gnu.property 
+      11     .eh_frame_hdr 
+      12     
+      13     .init_array .fini_array .dynamic .got
+    ```
 
-PHT describes how the operating system should load the ELF binary into memory. It maps parts of the binary file into memory regions with specific permissions and purposes.
+PHT describes how the operating system should load the ELF binary into the memory. It maps parts of the binary file into memory regions with specific permissions and purposes.
 
 A simple decode of this cryptic table is:
   - Type: PHDR
@@ -227,7 +209,7 @@ A simple decode of this cryptic table is:
     Size:    0x310
     Flags:   R
     ```
-    This describes where in memory the program headers themselves are located.
+    This describes where in the memory the program headers themselves are located.
 
     The loader reads this to get all other segment info.
 
@@ -302,20 +284,20 @@ Now our program's memory is loaded, but we're not executing yet.
 
 Since the PHT has INTERP header, this tells the kernel to run this interpreter `interpreter: /lib64/ld-linux-x86-64.so.2` before jumping to the entry point of the binary.
 
-The kernel now loads the dynamic linker (ld-linux-x86-64.so.2) into memory via its own PHT.
+The kernel now loads the dynamic linker (`ld-linux-x86-64.so.2`) into memory via its own PHT.
 
 The dynamic linker is the first code that will run in this process.
 
-Now the kernel sets up the stack, `rip` to ld-linux's entry point and returns the control to userspace.
+Now the kernel set up the stack, `rip` to ld-linux's entry point and returns the control to userspace.
 
 And the child process is finally alive.
 
 ld-linux now:
-  1. Parses the `.dynamic` section (readelf -S main_exe)
+  1. Parses the `.dynamic` section (readelf -S main_elf)
   2. Finds the required shared libraries, like `libc.so.6`
   3. Loads them into memory using `mmap()`.
   4. Applies relocations to the code.
-  5. Finally, jumps to our ELF binary's real entry point (not main, but _start).
+  5. Finally, jumps to our ELF binary's real entry point (not `main`, but `_start`).
 
 ### Entrypoint Mgmt && Program Execution
 
@@ -375,7 +357,7 @@ int main() {
     printf("Child PID: %d, PPID: %d\n", getpid(), getppid());
 
     // 2. Image replacement using exec
-    char *args[] = {"./main_exe", NULL};
+    char *args[] = {"./main_elf", NULL};
     if (execvp(args[0], args) == -1) {
       perror("exec failed");
       exit(EXIT_FAILURE);
