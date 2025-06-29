@@ -53,6 +53,7 @@ int main() {
     
     if (WIFEXITED(status)) {
       printf("Child exited with status %d\n", WEXITSTATUS(status));
+      printf("---------------------------\n");
       printf("Return value from fork(): to `p_proc` %d\n", pid);
     } else {
       printf("Child did not exit normally.\n");
