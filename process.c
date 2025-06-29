@@ -16,19 +16,27 @@
 int main() {
   pid_t pid;
 
-  printf("Parent PID: %d\n", getpid());
-
+  printf("Calling Process `p_proc`:\n");
+  printf("  PPID: %d\n", getppid());
+  printf("  PID : %d\n", getpid());
+  printf("---------------------------\n");
+  
   // 1. Process creation (fork)
+  printf("Calling fork.....\n");
   pid = fork();
-
-  if (pid < 0) {
+  
+  if (pid == -1) {
     perror("fork failed");
+    printf("`p_proc`: return value from fork(): %d\n", pid);
     exit(EXIT_FAILURE);
   }
-
+  
   if (pid == 0) {
-    // Child process
-    printf("Child PID: %d, PPID: %d\n", getpid(), getppid());
+    printf("Cloned Process `c_proc`:\n");
+    printf("  PPID: %d\n", getppid());
+    printf("  PID : %d\n", getpid());
+    printf("Return value from fork() to `c_proc`: %d\n", pid);
+    printf("---------------------------\n");
 
     // 2. Image replacement using exec
     char *args[] = {"./main_elf", NULL};
@@ -42,9 +50,10 @@ int main() {
     // Parent process
     int status;
     waitpid(pid, &status, 0);  // Wait for child to finish
-
+    
     if (WIFEXITED(status)) {
       printf("Child exited with status %d\n", WEXITSTATUS(status));
+      printf("Return value from fork(): to `p_proc` %d\n", pid);
     } else {
       printf("Child did not exit normally.\n");
     }
